@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Redeem a coupon | Chubby's staff</title>
+<link rel="icon" type="image/png" href="assets/logo.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alfa+Slab+One&family=Rethink+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="bar"><div class="in">
+  <img src="assets/logo.png" alt="Chubby's Neighborhood Cafe logo">
+  <div><div class="brand">Staff</div><div class="sub">Redeem a coupon</div></div>
+</div></header>
+<main>
+  <form class="screen" id="form" novalidate>
+    <h1>Redeem a coupon</h1>
+    <p class="muted">Type the code from the guest's phone. If it says Valid, give the free cookie and apply the comp in Genius. Each code works once.</p>
+    <div class="field"><label for="pin">Staff PIN</label><input id="pin" type="password" inputmode="numeric" autocomplete="off"></div>
+    <div class="field"><label for="code">Coupon code</label><input id="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="20"></div>
+    <button class="btn" type="submit" id="go">Check code</button>
+    <p class="msg" id="result" role="status" hidden></p>
+  </form>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+// The PIN stays filled in until this tab is closed, so staff type it once per shift.
+try { $("pin").value = sessionStorage.getItem("staffPin") || ""; } catch {}
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const out = $("result");
+  $("go").disabled = true;
+  try {
+    const res = await fetch("/api/redeem", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pin: $("pin").value, code: $("code").value }) });
+    const data = await res.json().catch(() => ({}));
+    out.hidden = false;
+    if (!res.ok) { out.className = "msg bad"; out.textContent = data.error || "Something went wrong. Try again."; return; }
+    try { sessionStorage.setItem("staffPin", $("pin").value); } catch {}
+    out.className = "msg " + (data.result === "valid" ? "ok" : data.result === "unknown" ? "warn" : "bad");
+    out.textContent = data.message;
+    if (data.result === "valid") $("code").value = "";
+  } catch {
+    out.hidden = false; out.className = "msg bad"; out.textContent = "No connection. Try again.";
+  } finally {
+    $("go").disabled = false;
+  }
+});
+</script>
+</body>
+</html>

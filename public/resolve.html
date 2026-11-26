@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Mark a complaint resolved | Chubby's staff</title>
+<link rel="icon" type="image/png" href="assets/logo.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alfa+Slab+One&family=Rethink+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="bar"><div class="in">
+  <img src="assets/logo.png" alt="Chubby's Neighborhood Cafe logo">
+  <div><div class="brand">Staff</div><div class="sub">Guest complaint</div></div>
+</div></header>
+<main>
+  <form class="screen" id="form" novalidate>
+    <h1>Mark this complaint resolved</h1>
+    <p class="muted">Do this after you have contacted the guest. It stops the 24-hour follow-up message.</p>
+    <div class="field"><label for="pin">Staff PIN</label><input id="pin" type="password" inputmode="numeric" autocomplete="off"></div>
+    <div class="field"><label for="by">Your name</label><input id="by" type="text" autocomplete="name" maxlength="60"></div>
+    <div class="field"><label for="note">What did you do for the guest? (optional)</label><textarea id="note" maxlength="1000"></textarea></div>
+    <button class="btn" type="submit" id="go">Mark resolved</button>
+    <p class="msg" id="result" role="status" hidden></p>
+    <p class="small muted" id="summary" hidden></p>
+  </form>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const token = new URLSearchParams(location.search).get("t") || "";
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const out = $("result");
+  $("go").disabled = true;
+  try {
+    const res = await fetch("/api/resolve", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pin: $("pin").value, token, by: $("by").value, note: $("note").value }) });
+    const data = await res.json().catch(() => ({}));
+    out.hidden = false;
+    if (!res.ok) { out.className = "msg bad"; out.textContent = data.error || "Something went wrong. Try again."; return; }
+    out.className = "msg ok";
+    out.textContent = data.message;
+    if (data.summary) {
+      const s = data.summary;
+      $("summary").hidden = false;
+      $("summary").textContent = s.rating + " stars, received " + s.receivedAt + ". Guest: " + (s.name || "no name") + ", " + (s.phone || "no phone") + ". " + (s.comment || "");
+    }
+  } catch {
+    out.hidden = false; out.className = "msg bad"; out.textContent = "No connection. Try again.";
+  } finally {
+    $("go").disabled = false;
+  }
+});
+</script>
+</body>
+</html>

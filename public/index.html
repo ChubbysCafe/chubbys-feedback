@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>How was your visit? | Chubby's</title>
+<link rel="icon" type="image/png" href="assets/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alfa+Slab+One&family=Rethink+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="bar"><div class="in">
+  <img src="assets/logo.png" alt="Chubby's Neighborhood Cafe logo">
+  <div><div class="brand" id="storeName">Chubby's</div><div class="sub" id="storeCity"></div></div>
+</div></header>
+
+<main>
+  <!-- 1. Star rating -->
+  <section class="screen center" id="rate">
+    <h1>How was your visit today?</h1>
+    <p class="muted">Tap a star. It takes about 30 seconds, and you get a free cookie on your next visit.</p>
+    <div class="stars" id="starButtons"></div>
+    <div class="scale"><span>Not good</span><span>Great</span></div>
+    <p class="msg bad" id="rateError" hidden></p>
+  </section>
+
+  <!-- 2. Low rating: reach the owner -->
+  <section class="screen" id="details" hidden>
+    <div class="stars shown" id="starsDetails" aria-hidden="true"></div>
+    <h1>We're sorry. Let us make this right.</h1>
+    <p class="muted">Your message goes straight to the owner of this location, who will contact you personally.</p>
+    <form id="feedbackForm" class="screen" novalidate>
+      <div class="field"><label for="comment">What went wrong?</label><textarea id="comment" maxlength="2000"></textarea></div>
+      <div class="field"><label for="name">Your name</label><input id="name" type="text" autocomplete="name" maxlength="80"></div>
+      <div class="field"><label for="phone">Mobile number so the owner can reach you</label><input id="phone" type="tel" autocomplete="tel" maxlength="30"></div>
+      <p class="msg bad" id="formError" hidden></p>
+      <button class="btn" type="submit" id="sendBtn">Send to the owner</button>
+    </form>
+    <button class="link" type="button" id="skipBtn">Skip this</button>
+  </section>
+
+  <!-- 3a. Happy: ask for the Google review -->
+  <section class="screen" id="happyDone" hidden>
+    <div class="stars shown" id="starsHappy" aria-hidden="true"></div>
+    <h1>Thank you! One last favor?</h1>
+    <p class="muted">Reviews help a neighborhood restaurant more than anything. Would you share your experience on Google?</p>
+    <a class="btn googleLink" href="#" target="_blank" rel="noopener">Review us on Google</a>
+    <div class="couponSlot"></div>
+  </section>
+
+  <!-- 3b. Unhappy: confirmation -->
+  <section class="screen" id="unhappyDone" hidden>
+    <h1 id="unhappyTitle">Your message is with the owner.</h1>
+    <p class="muted" id="unhappyText">Expect a call or text within 24 hours. Thank you for giving us the chance to fix it.</p>
+    <div class="couponSlot"></div>
+    <a class="link googleLink" href="#" target="_blank" rel="noopener">You can also leave a public review on Google</a>
+  </section>
+</main>
+
+<script>
+const STAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.6l-5.8 3.1 1.1-6.5L2.6 9.6l6.5-.9z"></path></svg>';
+const $ = (id) => document.getElementById(id);
+const storeKey = new URLSearchParams(location.search).get("s") || "lehi";
+let session = null; // { token, happy, coupon, offer, rating }
+
+function show(id) {
+  for (const s of document.querySelectorAll("main > .screen")) s.hidden = s.id !== id;
+  window.scrollTo(0, 0);
+}
+function showError(el, text) { el.textContent = text; el.hidden = !text; }
+
+async function api(path, body) {
+  const res = await fetch("/api/" + path, body
+    ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }
+    : undefined);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Something went wrong. Please try again.");
+  return data;
+}
+
+function drawStars(el, rating) {
+  el.innerHTML = "";
+  for (let n = 1; n <= 5; n++) {
+    const span = document.createElement("span");
+    span.innerHTML = STAR;
+    if (n <= rating) span.firstChild.classList.add("on");
+    el.appendChild(span);
+  }
+}
+
+function drawCoupon() {
+  for (const slot of document.querySelectorAll(".couponSlot")) {
+    slot.innerHTML = "";
+    if (!session || !session.coupon) continue;
+    const until = new Date(session.coupon.expiresAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    const box = document.createElement("div");
+    box.className = "coupon";
+    box.innerHTML = '<div class="small muted"></div><div class="offer"></div><div class="code"></div><div class="small muted"></div>';
+    box.children[0].textContent = session.happy ? "Yours either way, for the survey" : "For your time";
+    box.children[1].textContent = session.offer;
+    box.children[2].textContent = session.coupon.code;
+    box.children[3].textContent = "Show this code at the register. Valid once, through " + until + ". Take a screenshot to save it.";
+    slot.appendChild(box);
+  }
+}
+
+async function pick(rating) {
+  showError($("rateError"), "");
+  for (const b of $("starButtons").children) b.disabled = true;
+  try {
+    const data = await api("rating", { store: storeKey, rating });
+    session = { ...data, rating };
+    drawStars($("starsDetails"), rating);
+    drawStars($("starsHappy"), rating);
+    drawCoupon();
+    show(data.happy ? "happyDone" : "details");
+  } catch (err) {
+    showError($("rateError"), err.message);
+  } finally {
+    for (const b of $("starButtons").children) b.disabled = false;
+  }
+}
+
+for (let n = 1; n <= 5; n++) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.setAttribute("aria-label", n + (n === 1 ? " star" : " stars"));
+  b.innerHTML = STAR;
+  b.addEventListener("click", () => pick(n));
+  $("starButtons").appendChild(b);
+}
+
+$("feedbackForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  showError($("formError"), "");
+  $("sendBtn").disabled = true;
+  try {
+    await api("feedback", { token: session.token, comment: $("comment").value, name: $("name").value, phone: $("phone").value });
+    show("unhappyDone");
+  } catch (err) {
+    showError($("formError"), err.message);
+  } finally {
+    $("sendBtn").disabled = false;
+  }
+});
+
+$("skipBtn").addEventListener("click", () => {
+  $("unhappyTitle").textContent = "Thank you for telling us.";
+  $("unhappyText").textContent = "We read every rating and use it to get better.";
+  show("unhappyDone");
+});
+
+api("store?s=" + encodeURIComponent(storeKey)).then((store) => {
+  $("storeName").textContent = store.name;
+  $("storeCity").textContent = store.city;
+  for (const a of document.querySelectorAll(".googleLink")) a.href = store.googleReviewUrl;
+}).catch((err) => showError($("rateError"), err.message));
+</script>
+</body>
+</html>
