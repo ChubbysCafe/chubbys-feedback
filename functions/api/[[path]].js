@@ -7,6 +7,7 @@
 //   CHAT_WEBHOOK_ALERTS   Google Chat webhook link for new low ratings
 //   CHAT_WEBHOOK_FOLLOWUP Google Chat webhook link for complaints still open after 24 hours
 //   CRON_KEY              password the hourly check uses (see .github/workflows/followup.yml)
+//   MANAGER_PASSWORD      password for the results page (/results), for the owner and manager
 
 // ---- Stores. Add a store here to give it its own survey link (?s=<key>). ----
 const STORES = {
@@ -55,6 +56,11 @@ let schemaReady = false;
 async function ensureSchema(db) {
   if (schemaReady) return;
   await db.batch(SCHEMA.map((sql) => db.prepare(sql)));
+  // Added after launch: when the guest tapped a Google review link. The command
+  // fails harmlessly once the column exists.
+  try {
+    await db.prepare("ALTER TABLE responses ADD COLUMN google_clicked_at INTEGER").run();
+  } catch {}
   schemaReady = true;
 }
 
@@ -94,19 +100,23 @@ function sameText(a, b) {
 
 // Checks the staff PIN and slows down guessing. Returns null when the PIN is right,
 // otherwise the response to send back.
-async function checkPin(env, request, pin) {
-  if (!env.STAFF_PIN) return json({ error: "The staff PIN has not been set up yet." }, 503);
+const checkPin = (env, request, pin) => checkSecret(env, request, pin, env.STAFF_PIN, "PIN");
+const checkManager = (env, request, password) => checkSecret(env, request, password, env.MANAGER_PASSWORD, "password");
+
+async function checkSecret(env, request, given, expected, word) {
+  if (!expected) return json({ error: `The ${word} has not been set up yet.` }, 503);
+  const pin = given;
   const ip = request.headers.get("cf-connecting-ip") || "unknown";
   const now = Date.now();
   const since = now - 15 * 60 * 1000;
   const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM pin_fails WHERE ip = ? AND at > ?").bind(ip, since).first();
-  if (row && row.n >= PIN_TRIES) return json({ error: "Too many wrong PINs. Try again in 15 minutes." }, 429);
-  if (sameText(String(pin || ""), String(env.STAFF_PIN))) return null;
+  if (row && row.n >= PIN_TRIES) return json({ error: "Too many wrong tries. Try again in 15 minutes." }, 429);
+  if (sameText(String(pin || ""), String(expected))) return null;
   await env.DB.batch([
     env.DB.prepare("INSERT INTO pin_fails (ip, at) VALUES (?, ?)").bind(ip, now),
     env.DB.prepare("DELETE FROM pin_fails WHERE at < ?").bind(now - DAY),
   ]);
-  return json({ error: "Wrong PIN." }, 401);
+  return json({ error: `Wrong ${word}.` }, 401);
 }
 
 async function postToChat(url, text) {
@@ -255,7 +265,10 @@ async function handleRedeem(context, body) {
 // ---- Staff: mark a complaint resolved ----
 async function handleResolve(context, body) {
   const { env, request } = context;
-  const denied = await checkPin(env, request, body.pin);
+  // Staff use the PIN (from the alert link); the results page uses the manager password.
+  const denied = body.password !== undefined
+    ? await checkManager(env, request, body.password)
+    : await checkPin(env, request, body.pin);
   if (denied) return denied;
   const token = clean(body.token, 64);
   const r = await env.DB.prepare("SELECT * FROM responses WHERE token = ?").bind(token).first();
@@ -270,6 +283,88 @@ async function handleResolve(context, body) {
     "UPDATE responses SET status = 'resolved', resolved_at = ?, resolved_by = ?, resolved_note = ? WHERE id = ?"
   ).bind(Date.now(), by, clean(body.note, 1000), r.id).run();
   return json({ result: "resolved", message: "Marked resolved. Thank you.", summary });
+}
+
+// ---- Guest tapped a Google review link (we can see the tap, not whether a review was posted) ----
+async function handleClick(context, body) {
+  const token = clean(body.token, 64);
+  if (token) {
+    await context.env.DB.prepare(
+      "UPDATE responses SET google_clicked_at = ? WHERE token = ? AND google_clicked_at IS NULL"
+    ).bind(Date.now(), token).run();
+  }
+  return json({ ok: true });
+}
+
+// ---- Owner and manager: results page ----
+const denverDay = (ms) => new Date(ms).toLocaleDateString("en-CA", { timeZone: "America/Denver" }); // YYYY-MM-DD
+
+async function handleResults(context, body) {
+  const { env, request } = context;
+  const denied = await checkManager(env, request, body.password);
+  if (denied) return denied;
+
+  const storeKey = clean(body.store, 40) || "lehi";
+  if (!STORES[storeKey]) return json({ error: "Unknown store." }, 400);
+  const days = [7, 30, 90, 365].includes(Number(body.days)) ? Number(body.days) : 30;
+  const now = Date.now();
+  const since = now - days * DAY;
+  const db = env.DB;
+
+  const [ratings, open, resolved, coupons] = await db.batch([
+    db.prepare("SELECT rating, created_at, google_clicked_at FROM responses WHERE store = ? AND created_at > ? ORDER BY created_at LIMIT 20000").bind(storeKey, since),
+    db.prepare("SELECT token, rating, comment, name, phone, created_at, alerted_at, followup_at FROM responses WHERE store = ? AND status = 'open' ORDER BY alerted_at").bind(storeKey),
+    db.prepare("SELECT rating, comment, name, phone, created_at, resolved_at, resolved_by, resolved_note FROM responses WHERE store = ? AND status = 'resolved' AND resolved_at > ? ORDER BY resolved_at DESC LIMIT 100").bind(storeKey, since),
+    db.prepare(
+      `SELECT COUNT(*) AS issued,
+              SUM(CASE WHEN redeemed_at IS NOT NULL THEN 1 ELSE 0 END) AS redeemed,
+              SUM(CASE WHEN redeemed_at IS NULL AND expires_at < ?1 THEN 1 ELSE 0 END) AS expired,
+              SUM(CASE WHEN redeemed_at IS NULL AND expires_at >= ?1 THEN 1 ELSE 0 END) AS unused
+       FROM coupons WHERE store = ?2 AND issued_at > ?3`
+    ).bind(now, storeKey, since),
+  ]);
+
+  const rows = ratings.results;
+  const byStar = [0, 0, 0, 0, 0];
+  const byDay = new Map();
+  let sum = 0, happy = 0, clicks = 0;
+  for (const r of rows) {
+    byStar[r.rating - 1]++;
+    sum += r.rating;
+    if (r.rating >= HAPPY_FROM) happy++;
+    if (r.google_clicked_at) clicks++;
+    const day = denverDay(r.created_at);
+    const d = byDay.get(day) || { day, count: 0, sum: 0, happy: 0 };
+    d.count++; d.sum += r.rating; if (r.rating >= HAPPY_FROM) d.happy++;
+    byDay.set(day, d);
+  }
+  const c = coupons.results[0] || {};
+  const store = STORES[storeKey];
+  return json({
+    store: { key: storeKey, name: store.name, city: store.city },
+    days,
+    summary: {
+      ratings: rows.length,
+      average: rows.length ? Math.round((sum / rows.length) * 100) / 100 : null,
+      happy,
+      happyShare: rows.length ? Math.round((happy / rows.length) * 100) : null,
+      googleClicks: clicks,
+      byStar,
+    },
+    daily: [...byDay.values()].reverse().map((d) => ({
+      day: d.day, count: d.count, average: Math.round((d.sum / d.count) * 100) / 100, happy: d.happy,
+    })),
+    open: open.results.map((r) => ({
+      token: r.token, rating: r.rating, comment: r.comment, name: r.name, phone: r.phone,
+      receivedAt: when(r.created_at), hoursOpen: Math.floor((now - (r.alerted_at || r.created_at)) / 3600000),
+      followedUp: Boolean(r.followup_at),
+    })),
+    resolved: resolved.results.map((r) => ({
+      rating: r.rating, comment: r.comment, name: r.name, phone: r.phone,
+      receivedAt: when(r.created_at), resolvedAt: when(r.resolved_at), resolvedBy: r.resolved_by, note: r.resolved_note,
+    })),
+    coupons: { issued: c.issued || 0, redeemed: c.redeemed || 0, expired: c.expired || 0, unused: c.unused || 0 },
+  });
 }
 
 export async function onRequest(context) {
@@ -309,6 +404,8 @@ export async function onRequest(context) {
     if (route === "feedback") return await handleFeedback(context, body, origin);
     if (route === "redeem") return await handleRedeem(context, body);
     if (route === "resolve") return await handleResolve(context, body);
+    if (route === "click") return await handleClick(context, body);
+    if (route === "results") return await handleResults(context, body);
     return json({ error: "Not found." }, 404);
   } catch (err) {
     console.log("Error:", err && err.stack ? err.stack : err);

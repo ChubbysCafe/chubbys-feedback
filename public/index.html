@@ -147,6 +147,16 @@ $("feedbackForm").addEventListener("submit", async (e) => {
   }
 });
 
+// Count taps on the Google review links (the tap, not whether a review gets posted).
+for (const a of document.querySelectorAll(".googleLink")) {
+  a.addEventListener("click", () => {
+    if (!session) return;
+    try {
+      fetch("/api/click", { method: "POST", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify({ token: session.token }) });
+    } catch {}
+  });
+}
+
 $("skipBtn").addEventListener("click", () => {
   $("unhappyTitle").textContent = "Thank you for telling us.";
   $("unhappyText").textContent = "We read every rating and use it to get better.";

@@ -10,11 +10,12 @@ Guest feedback survey for Chubby's, starting with a pilot at Chubby's Express in
 4. **Staff redeem coupons** at `https://feedback.chubbyscafe.com/staff` with the staff PIN. Each code works once and lasts 30 days. One coupon per phone per week.
 5. **Staff mark a complaint resolved** from the link in the alert, with the staff PIN.
 6. A complaint still open after **24 hours** is posted to a second Chat space.
+7. **Results page** for the owner and manager at `https://feedback.chubbyscafe.com/results` with the manager password: ratings summary, open and resolved complaints (with a resolve button), coupon counts and a by-day table. "Google taps" counts taps on a Google review link, not posted reviews.
 
 ## What is in this folder
 
 - `public/` is the website. Only this folder is published.
-  - `index.html` guest survey, `staff.html` coupon redeem page, `resolve.html` mark-resolved page, `styles.css` shared colors and fonts.
+  - `index.html` guest survey, `staff.html` coupon redeem page, `resolve.html` mark-resolved page, `results.html` results page, `styles.css` shared colors and fonts.
 - `functions/api/[[path]].js` is the part that saves ratings, makes coupon codes and sends Chat messages. The store list, the offer wording, the 30-day coupon life and the 4-star cutoff are at the top of that file.
 - `.github/workflows/followup.yml` runs the hourly check for complaints open more than 24 hours.
 
@@ -30,6 +31,7 @@ The Cloudflare project needs these (Settings):
 | `STAFF_PIN` | Secret | PIN staff type to redeem coupons and resolve complaints |
 | `CHAT_WEBHOOK_ALERTS` | Secret | Webhook link of the Chat space that gets new low ratings |
 | `CHAT_WEBHOOK_FOLLOWUP` | Secret | Webhook link of the Chat space that gets 24-hour follow-ups |
+| `MANAGER_PASSWORD` | Secret | Password for the results page. Give it only to the owner and manager; the page shows guest names and phone numbers. |
 | `CRON_KEY` | Secret | Any long random password. Put the same value in this repository's Actions secrets as `CRON_KEY`. |
 
 ## Adding a store

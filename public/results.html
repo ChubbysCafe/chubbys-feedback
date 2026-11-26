@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Feedback results | Chubby's</title>
+<link rel="icon" type="image/png" href="assets/logo.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alfa+Slab+One&family=Rethink+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+<style>
+  main, .bar .in { max-width: 860px; }
+  h2 { margin: 12px 0 0; font-family: var(--font-display); font-weight: 400; font-size: 22px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .row .field { flex: 1 1 180px; }
+  select { font: inherit; height: 48px; padding: 0 12px; border: 1px solid var(--muted); border-radius: 10px; background: #fff; color: var(--ink); width: 100%; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .tile, .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .tile .num { font-family: var(--font-display); font-size: 30px; line-height: 1.1; }
+  .tile .lbl { font-size: 13px; color: var(--muted); }
+  .bars { display: grid; grid-template-columns: 64px 1fr 44px; gap: 6px 10px; align-items: center; font-size: 14px; }
+  .track { background: var(--line); border-radius: 6px; height: 14px; overflow: hidden; }
+  .fill { background: var(--navy); height: 100%; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { font-size: 13px; color: var(--muted); font-weight: 600; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .cards { display: flex; flex-direction: column; gap: 12px; }
+  .card { display: flex; flex-direction: column; gap: 8px; }
+  .card .head { display: flex; gap: 10px; flex-wrap: wrap; justify-content: space-between; font-weight: 700; }
+  .card .comment { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .tag { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--red); color: var(--red); }
+  .card .btn { min-height: 46px; width: auto; align-self: flex-start; font-size: 15px; }
+  .card a { color: var(--navy); font-weight: 700; }
+  #signedIn[hidden] { display: none; }
+</style>
+</head>
+<body>
+<header class="bar"><div class="in">
+  <img src="assets/logo.png" alt="Chubby's Neighborhood Cafe logo">
+  <div><div class="brand">Feedback results</div><div class="sub" id="storeLine">Chubby's Express · Lehi</div></div>
+</div></header>
+<main>
+  <form class="screen" id="login" novalidate>
+    <div class="row">
+      <div class="field"><label for="password">Manager password</label><input id="password" type="password" autocomplete="current-password"></div>
+      <div class="field"><label for="days">Period</label>
+        <select id="days"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last 12 months</option></select></div>
+      <div class="field"><button class="btn" type="submit" id="go">Show results</button></div>
+    </div>
+    <p class="msg bad" id="error" role="alert" hidden></p>
+  </form>
+
+  <div class="screen" id="signedIn" hidden>
+    <h2>Summary</h2>
+    <div class="tiles" id="tiles"></div>
+    <div class="card"><div class="bars" id="bars"></div></div>
+
+    <h2>Open complaints</h2>
+    <div class="cards" id="open"></div>
+
+    <h2>Coupons</h2>
+    <div class="tiles" id="coupons"></div>
+
+    <h2>By day</h2>
+    <div class="card scroll"><table><thead><tr><th>Day</th><th class="n">Ratings</th><th class="n">Average</th><th class="n">4–5 stars</th></tr></thead><tbody id="daily"></tbody></table></div>
+
+    <h2>Resolved complaints</h2>
+    <div class="cards" id="resolved"></div>
+    <p class="small muted">"Google taps" counts guests who tapped a Google review link. It cannot show whether they posted a review. Counting started when this page was added.</p>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+// Builds an element with plain text only, so guest comments can never run as code.
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined && text !== null) e.textContent = String(text);
+  return e;
+}
+const starText = (n) => "★".repeat(n) + "☆".repeat(5 - n);
+const telHref = (phone) => "tel:" + String(phone).replace(/[^0-9+]/g, "");
+try { $("password").value = sessionStorage.getItem("mgrPw") || ""; } catch {}
+
+async function post(path, body) {
+  const res = await fetch("/api/" + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Something went wrong. Try again.");
+  return data;
+}
+
+function tile(num, label) {
+  const t = el("div", "tile");
+  t.append(el("div", "num", num), el("div", "lbl", label));
+  return t;
+}
+
+function complaintCard(c, isOpen) {
+  const card = el("div", "card");
+  const head = el("div", "head");
+  head.append(el("span", "", starText(c.rating) + "  " + c.receivedAt));
+  if (isOpen) head.append(el("span", c.hoursOpen >= 24 ? "tag" : "small muted", "Open " + (c.hoursOpen < 1 ? "under 1 hour" : c.hoursOpen + " hours")));
+  card.append(head, el("div", "comment", c.comment || "(no comment)"));
+  const who = el("div", "");
+  who.append(el("span", "", (c.name || "No name") + " · "));
+  if (c.phone) { const a = el("a", "", c.phone); a.href = telHref(c.phone); who.append(a); } else who.append(el("span", "muted", "no phone"));
+  card.append(who);
+  if (!isOpen) {
+    card.append(el("div", "small muted", "Resolved " + c.resolvedAt + " by " + (c.resolvedBy || "staff") + (c.note ? ": " + c.note : "")));
+    return card;
+  }
+  const by = el("input"); by.type = "text"; by.placeholder = "Your name"; by.setAttribute("aria-label", "Your name"); by.maxLength = 60;
+  const note = el("input"); note.type = "text"; note.placeholder = "What you did for the guest (optional)"; note.setAttribute("aria-label", "What you did for the guest"); note.maxLength = 1000;
+  const btn = el("button", "btn", "Mark resolved"); btn.type = "button";
+  const msg = el("div", "small"); msg.setAttribute("role", "status");
+  btn.addEventListener("click", async () => {
+    btn.disabled = true; msg.textContent = "";
+    try {
+      await post("resolve", { password: $("password").value, token: c.token, by: by.value, note: note.value });
+      await load();
+    } catch (err) { msg.textContent = err.message; btn.disabled = false; }
+  });
+  card.append(by, note, btn, msg);
+  return card;
+}
+
+function render(d) {
+  $("storeLine").textContent = d.store.name + " · " + d.store.city;
+  const s = d.summary;
+  $("tiles").replaceChildren(
+    tile(s.ratings, "Ratings"),
+    tile(s.average === null ? "–" : s.average.toFixed(2), "Average stars"),
+    tile(s.happyShare === null ? "–" : s.happyShare + "%", "Rated 4–5 stars"),
+    tile(s.googleClicks, "Google taps"),
+    tile(d.open.length, "Open complaints")
+  );
+  const max = Math.max(1, ...s.byStar);
+  const bars = [];
+  for (let n = 5; n >= 1; n--) {
+    const track = el("div", "track"); const fill = el("div", "fill");
+    fill.style.width = Math.round((s.byStar[n - 1] / max) * 100) + "%"; track.append(fill);
+    bars.push(el("div", "", n + (n === 1 ? " star" : " stars")), track, el("div", "", s.byStar[n - 1]));
+  }
+  $("bars").replaceChildren(...bars);
+  $("open").replaceChildren(...(d.open.length ? d.open.map((c) => complaintCard(c, true)) : [el("p", "muted", "No open complaints.")]));
+  $("resolved").replaceChildren(...(d.resolved.length ? d.resolved.map((c) => complaintCard(c, false)) : [el("p", "muted", "None in this period.")]));
+  const c = d.coupons;
+  $("coupons").replaceChildren(tile(c.issued, "Issued"), tile(c.redeemed, "Redeemed"), tile(c.unused, "Not used yet"), tile(c.expired, "Expired unused"));
+  $("daily").replaceChildren(...(d.daily.length ? d.daily.map((r) => {
+    const tr = el("tr");
+    tr.append(el("td", "", new Date(r.day + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })),
+      el("td", "n", r.count), el("td", "n", r.average.toFixed(2)), el("td", "n", r.happy));
+    return tr;
+  }) : [(() => { const tr = el("tr"); const td = el("td", "muted", "No ratings in this period."); td.colSpan = 4; tr.append(td); return tr; })()]));
+  $("signedIn").hidden = false;
+}
+
+async function load() {
+  const err = $("error"); err.hidden = true;
+  $("go").disabled = true;
+  try {
+    const data = await post("results", { password: $("password").value, days: Number($("days").value), store: new URLSearchParams(location.search).get("s") || "lehi" });
+    try { sessionStorage.setItem("mgrPw", $("password").value); } catch {}
+    render(data);
+  } catch (e) {
+    err.textContent = e.message; err.hidden = false; $("signedIn").hidden = true;
+  } finally {
+    $("go").disabled = false;
+  }
+}
+$("login").addEventListener("submit", (e) => { e.preventDefault(); load(); });
+$("days").addEventListener("change", () => { if (!$("signedIn").hidden) load(); });
+</script>
+</body>
+</html>
